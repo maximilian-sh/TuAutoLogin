@@ -9,6 +9,9 @@
 // @match        https://idp.zid.tuwien.ac.at/simplesaml/module.php/core/loginuserpass*
 // @match        https://idp.zid.tuwien.ac.at/simplesaml/module.php/tupwquality/badquality*
 // @icon         https://tuwel.tuwien.ac.at/pluginfile.php/2/theme_boost_union/favicon/64x64/1759205872/tuwel_favicon.png
+// @homepageURL  https://github.com/maximilian-sh/TuAutoLogin
+// @updateURL    https://raw.githubusercontent.com/maximilian-sh/TuAutoLogin/main/TuAutoLogin.user.js
+// @downloadURL  https://raw.githubusercontent.com/maximilian-sh/TuAutoLogin/main/TuAutoLogin.user.js
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
