@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TuAutoLogin
 // @namespace    https://tuwien.ac.at/
-// @version      1.2.0
+// @version      1.3.0
 // @description  Auto-login helper for TUWEL/TISS via TU Wien IdP. Choose between convenient (encrypted storage) or secure (manual input) modes.
 // @author       Maximilian Kallina
 // @match        https://tuwel.tuwien.ac.at/*
@@ -26,6 +26,9 @@
         password: "TuAutoLogin.password",
         securityMode: "TuAutoLogin.securityMode", // "convenient" or "secure"
     };
+
+    // Flag to prevent multiple auto-submissions
+    let hasTriedAutoSubmit = false;
 
     // Encryption utilities
     async function deriveKey() {
@@ -298,23 +301,62 @@
     async function onIdPLogin() {
         const creds = await ensureCredentials();
 
-        // If no credentials (secure mode), let user fill manually
-        if (!creds.username || !creds.password) {
-            console.log("TuAutoLogin: Secure mode - user will enter credentials manually");
-            return;
-        }
-
-        // Auto-fill credentials (convenient mode)
+        // Wait for input fields to be available
         const userInput = await waitForSelector("#username").catch(() => null);
         const passInput = document.querySelector("#password");
         if (!userInput || !passInput) return;
-        userInput.value = creds.username;
-        passInput.value = creds.password;
-        const submitBtn = document.querySelector("#samlloginbutton");
-        if (submitBtn) submitBtn.click();
-        else {
-            const form = document.querySelector("form#f");
-            if (form) form.submit();
+
+        // If we have stored credentials (convenient mode), auto-fill and submit
+        if (creds.username && creds.password) {
+            userInput.value = creds.username;
+            passInput.value = creds.password;
+            const submitBtn = document.querySelector("#samlloginbutton");
+            if (submitBtn) submitBtn.click();
+            else {
+                const form = document.querySelector("form#f");
+                if (form) form.submit();
+            }
+            return;
+        }
+
+        // Secure mode: Wait for any user interaction, then try to auto-submit if fields are filled
+        if (creds.username === "" && creds.password === "" && !hasTriedAutoSubmit) {
+            hasTriedAutoSubmit = true;
+
+            // Wait for any user interaction (click, keypress, etc.)
+            const handleUserInteraction = () => {
+                // Small delay to let auto-fill complete after interaction
+                setTimeout(() => {
+                    tryAutoSubmit();
+                }, 200);
+                // Remove listeners after first interaction
+                document.removeEventListener("click", handleUserInteraction);
+                document.removeEventListener("keydown", handleUserInteraction);
+                document.removeEventListener("keyup", handleUserInteraction);
+            };
+
+            // Listen for user interactions
+            document.addEventListener("click", handleUserInteraction);
+            document.addEventListener("keydown", handleUserInteraction);
+            document.addEventListener("keyup", handleUserInteraction);
+        }
+    }
+
+    function tryAutoSubmit() {
+        const userInput = document.querySelector("#username");
+        const passInput = document.querySelector("#password");
+
+        // Check if both fields are filled
+        if (userInput && passInput && userInput.value && passInput.value) {
+            const submitBtn = document.querySelector("#samlloginbutton");
+            if (submitBtn) {
+                submitBtn.click();
+            } else {
+                const form = document.querySelector("form#f");
+                if (form) {
+                    form.submit();
+                }
+            }
         }
     }
 
