@@ -25,6 +25,17 @@ Auto-login helper for TUWEL and TISS via TU Wien IdP (Tampermonkey userscript).
 -   TU Wien IdP (`/core/loginuserpass`): fills `username` and `password`, submits.
 -   Password quality warning (`/tupwquality/badquality`): clicks Continue when shown.
 
+### Security
+
+**Password Protection**: Passwords are encrypted before being stored in Tampermonkey storage to prevent casual inspection of stored credentials.
+
+**Security Limitations**:
+
+-   While this provides protection against casual browsing of storage, a determined attacker with browser access could still extract credentials
+-   This is inherent to any client-side auto-login solution - the encryption key must be derivable by the script
+-   For maximum security, consider using a dedicated password manager instead of storing credentials in browser storage
+-   The script automatically migrates existing plaintext passwords to encrypted storage on first run
+
 ### Permissions used
 
 -   `GM_getValue`, `GM_setValue`: store credentials.
