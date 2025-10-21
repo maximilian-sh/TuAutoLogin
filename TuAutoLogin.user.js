@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         TuAutoLogin
 // @namespace    https://tuwien.ac.at/
-// @version      1.1.0
-// @description  Auto-login helper for TUWEL/TISS via TU Wien IdP. Stores creds encrypted in Tampermonkey. Prompts if missing.
+// @version      1.2.0
+// @description  Auto-login helper for TUWEL/TISS via TU Wien IdP. Choose between convenient (encrypted storage) or secure (manual input) modes.
 // @author       Maximilian Kallina
-// @match        https://tuwel.tuwien.ac.at/login/index.php*
+// @match        https://tuwel.tuwien.ac.at/*
 // @match        https://tiss.tuwien.ac.at/*
 // @match        https://idp.zid.tuwien.ac.at/simplesaml/module.php/core/loginuserpass*
 // @match        https://idp.zid.tuwien.ac.at/simplesaml/module.php/tupwquality/badquality*
@@ -24,6 +24,7 @@
     const STORAGE_KEYS = {
         username: "TuAutoLogin.username",
         password: "TuAutoLogin.password",
+        securityMode: "TuAutoLogin.securityMode", // "convenient" or "secure"
     };
 
     // Encryption utilities
@@ -104,7 +105,20 @@
         }
     }
 
+    function getSecurityMode() {
+        return GM_getValue(STORAGE_KEYS.securityMode, "");
+    }
+
+    function setSecurityMode(mode) {
+        GM_setValue(STORAGE_KEYS.securityMode, mode);
+    }
+
     async function getStoredCredentials() {
+        const securityMode = getSecurityMode();
+        if (securityMode !== "convenient") {
+            return { username: "", password: "" }; // Don't return stored credentials in secure mode
+        }
+
         const username = GM_getValue(STORAGE_KEYS.username, "");
         const encryptedPassword = GM_getValue(STORAGE_KEYS.password, "");
 
@@ -123,13 +137,53 @@
     }
 
     async function ensureCredentials() {
+        const securityMode = getSecurityMode();
+
+        // If no security mode is set, ask the user to choose
+        if (!securityMode) {
+            const choice = window.confirm(
+                "🔐 TuAutoLogin Security Choice\n\n" +
+                    "✅ OK = CONVENIENT MODE\n" +
+                    "   • Stores credentials in browser\n" +
+                    "   • Fast automatic login\n" +
+                    "   • Not secure - credentials accessible\n\n" +
+                    "❌ CANCEL = SECURE MODE\n" +
+                    "   • No credentials stored\n" +
+                    "   • Enter password each time\n" +
+                    "   • Maximum security"
+            );
+
+            if (choice) {
+                setSecurityMode("convenient");
+            } else {
+                setSecurityMode("secure");
+                // In secure mode, don't ask for credentials - return empty
+                return { username: "", password: "" };
+            }
+        }
+
+        // Only get stored credentials if in convenient mode
         let { username, password } = await getStoredCredentials();
+
+        // If in secure mode, don't prompt for credentials
+        if (getSecurityMode() === "secure") {
+            return { username: "", password: "" };
+        }
+
+        // If no stored credentials in convenient mode, prompt user
         if (!username) {
             username = window.prompt("Enter TU Wien username");
-            if (username) GM_setValue(STORAGE_KEYS.username, username);
+            if (!username) return { username: "", password: "" };
         }
+
         if (!password) {
             password = window.prompt("Enter TU Wien password");
+            if (!password) return { username: "", password: "" };
+        }
+
+        // Store credentials only if in convenient mode
+        if (getSecurityMode() === "convenient") {
+            if (username) GM_setValue(STORAGE_KEYS.username, username);
             if (password) {
                 try {
                     const key = await deriveKey();
@@ -137,15 +191,19 @@
                     GM_setValue(STORAGE_KEYS.password, encryptedPassword);
                 } catch (error) {
                     console.error("Failed to encrypt password:", error);
-                    // Fallback to plaintext storage if encryption fails
                     GM_setValue(STORAGE_KEYS.password, password);
                 }
             }
         }
-        return await getStoredCredentials();
+
+        return { username, password };
     }
 
     function registerMenu() {
+        const currentMode = getSecurityMode();
+        const hasCredentials = GM_getValue(STORAGE_KEYS.username, "") !== "" || GM_getValue(STORAGE_KEYS.password, "") !== "";
+
+        // Always show "Set TU credentials" - works in both modes
         GM_registerMenuCommand("Set TU credentials", async () => {
             const u = window.prompt("Set TU Wien username", GM_getValue(STORAGE_KEYS.username, ""));
             if (typeof u === "string") GM_setValue(STORAGE_KEYS.username, u);
@@ -175,11 +233,31 @@
             }
             alert("Saved.");
         });
-        GM_registerMenuCommand("Clear TU credentials", () => {
-            GM_setValue(STORAGE_KEYS.username, "");
-            GM_setValue(STORAGE_KEYS.password, "");
-            alert("Cleared.");
-        });
+
+        // Show "Clear TU credentials" only if credentials exist
+        if (hasCredentials) {
+            GM_registerMenuCommand("Clear TU credentials", () => {
+                GM_setValue(STORAGE_KEYS.username, "");
+                GM_setValue(STORAGE_KEYS.password, "");
+                alert("Cleared.");
+            });
+        }
+
+        // Show mode switch options based on current mode
+        if (currentMode === "convenient") {
+            GM_registerMenuCommand("Switch to Secure Mode", () => {
+                setSecurityMode("secure");
+                // Clear any existing stored credentials
+                GM_setValue(STORAGE_KEYS.username, "");
+                GM_setValue(STORAGE_KEYS.password, "");
+                alert("Switched to Secure Mode. Stored credentials have been cleared.");
+            });
+        } else if (currentMode === "secure") {
+            GM_registerMenuCommand("Switch to Convenient Mode", () => {
+                setSecurityMode("convenient");
+                alert("Switched to Convenient Mode. Credentials will be stored in browser (not secure).");
+            });
+        }
     }
 
     function waitForSelector(selector, timeoutMs = 10000) {
@@ -219,7 +297,14 @@
 
     async function onIdPLogin() {
         const creds = await ensureCredentials();
-        if (!creds.username || !creds.password) return;
+
+        // If no credentials (secure mode), let user fill manually
+        if (!creds.username || !creds.password) {
+            console.log("TuAutoLogin: Secure mode - user will enter credentials manually");
+            return;
+        }
+
+        // Auto-fill credentials (convenient mode)
         const userInput = await waitForSelector("#username").catch(() => null);
         const passInput = document.querySelector("#password");
         if (!userInput || !passInput) return;
@@ -244,7 +329,11 @@
 
     function route() {
         const href = location.href;
-        if (href.startsWith("https://tuwel.tuwien.ac.at/login/index.php")) return onTUWEL();
+        if (href.startsWith("https://tuwel.tuwien.ac.at/")) {
+            // Only run TUWEL logic on login page
+            if (href.includes("/login/index.php")) return onTUWEL();
+            return; // Don't run on other TUWEL pages
+        }
         if (href.startsWith("https://tiss.tuwien.ac.at/")) return onTISS();
         if (href.startsWith("https://idp.zid.tuwien.ac.at/simplesaml/module.php/core/loginuserpass")) return onIdPLogin();
         if (href.startsWith("https://idp.zid.tuwien.ac.at/simplesaml/module.php/tupwquality/badquality")) return onIdPBadQuality();

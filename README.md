@@ -27,14 +27,28 @@ Auto-login helper for TUWEL and TISS via TU Wien IdP (Tampermonkey userscript).
 
 ### Security
 
-**Password Protection**: Passwords are encrypted before being stored in Tampermonkey storage to prevent casual inspection of stored credentials.
+**Two Security Modes**: The script offers a choice between convenience and security on first use.
+
+**Convenient Mode** (Default):
+
+-   Stores credentials in browser for automatic login
+-   Faster user experience - no manual input required
+-   Passwords obfuscated but not truly secure
+-   Protection against casual storage inspection only
+
+**Secure Mode**:
+
+-   No credentials stored anywhere
+-   Manual password entry required each time
+-   Maximum security - nothing stored in browser
+-   Slower but completely secure
 
 **Security Limitations**:
 
--   While this provides protection against casual browsing of storage, a determined attacker with browser access could still extract credentials
--   This is inherent to any client-side auto-login solution - the encryption key must be derivable by the script
--   For maximum security, consider using a dedicated password manager instead of storing credentials in browser storage
--   The script automatically migrates existing plaintext passwords to encrypted storage on first run
+-   Convenient mode: While encrypted, determined attackers with browser access could still extract credentials
+-   This is inherent to any client-side auto-login solution
+-   For maximum security, use Secure Mode or a dedicated password manager
+-   You can switch between modes anytime via the Tampermonkey menu
 
 ### Permissions used
 
