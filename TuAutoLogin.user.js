@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TuAutoLogin
 // @namespace    https://tuwien.ac.at/
-// @version      1.3.0
+// @version      1.4.0
 // @description  Auto-login helper for TUWEL/TISS via TU Wien IdP. Choose between convenient (encrypted storage) or secure (manual input) modes.
 // @author       Maximilian Kallina
 // @match        https://tuwel.tuwien.ac.at/*
@@ -299,14 +299,51 @@
     }
 
     async function onIdPLogin() {
-        const creds = await ensureCredentials();
-
         // Wait for input fields to be available
         const userInput = await waitForSelector("#username").catch(() => null);
         const passInput = document.querySelector("#password");
         if (!userInput || !passInput) return;
 
-        // If we have stored credentials (convenient mode), auto-fill and submit
+        // Quick check: if we have stored credentials, use them immediately (convenient mode)
+        const securityMode = getSecurityMode();
+        if (securityMode === "convenient") {
+            const storedUsername = GM_getValue(STORAGE_KEYS.username, "");
+            const storedPassword = GM_getValue(STORAGE_KEYS.password, "");
+
+            if (storedUsername && storedPassword) {
+                // Create beautiful iOS 26-themed loading screen
+                createLoadingScreen();
+
+                // Decrypt password quickly
+                let decryptedPassword = storedPassword;
+                try {
+                    const key = await deriveKey();
+                    decryptedPassword = await decryptText(storedPassword, key);
+                } catch (error) {
+                    // If decryption fails, use stored value (migration case)
+                    decryptedPassword = storedPassword;
+                }
+
+                // Auto-fill and submit
+                userInput.value = storedUsername;
+                passInput.value = decryptedPassword;
+
+                // Submit immediately
+                const submitBtn = document.querySelector("#samlloginbutton");
+                if (submitBtn) submitBtn.click();
+                else {
+                    const form = document.querySelector("form#f");
+                    if (form) form.submit();
+                }
+
+                return;
+            }
+        }
+
+        // If no stored credentials or secure mode, get credentials (may prompt user)
+        const creds = await ensureCredentials();
+
+        // If we have credentials after ensureCredentials, use them
         if (creds.username && creds.password) {
             userInput.value = creds.username;
             passInput.value = creds.password;
@@ -361,12 +398,105 @@
     }
 
     async function onIdPBadQuality() {
+        // Create loading screen for password quality warning
+        createLoadingScreen("Updating password security...");
+
         // Auto-continue on password quality warning page if shown
         const form = document.querySelector('body#tupwquality\\:badQuality form[name="f"]');
         if (!form) return;
         const button = form.querySelector('button[type="submit"], .btn[type="submit"]');
         if (button) button.click();
         else form.submit();
+    }
+
+    function createLoadingScreen(message = "Signing in...") {
+        // Hide the original page content
+        document.body.style.overflow = "hidden";
+
+        // Detect system theme
+        const isDarkMode = window.matchMedia("(prefers-color-scheme: dark)").matches;
+        const bgColor = isDarkMode ? "#000000" : "#ffffff";
+        const textColor = isDarkMode ? "#ffffff" : "#000000";
+        const spinnerColor = isDarkMode ? "#ffffff" : "#000000";
+        const spinnerBgColor = isDarkMode ? "rgba(255, 255, 255, 0.1)" : "rgba(0, 0, 0, 0.1)";
+
+        // Create the loading overlay
+        const overlay = document.createElement("div");
+        overlay.id = "tuautologin-loading";
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: ${bgColor};
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 999999;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            transition: background-color 0.3s ease;
+        `;
+
+        // Create the loading container
+        const container = document.createElement("div");
+        container.style.cssText = `
+            text-align: center;
+            color: ${textColor};
+            max-width: 320px;
+            padding: 60px 40px;
+        `;
+
+        // Create the loading spinner
+        const spinner = document.createElement("div");
+        spinner.style.cssText = `
+            width: 32px;
+            height: 32px;
+            border: 2px solid ${spinnerBgColor};
+            border-top: 2px solid ${spinnerColor};
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto 24px;
+        `;
+
+        // Create the message
+        const messageEl = document.createElement("div");
+        messageEl.textContent = message;
+        messageEl.style.cssText = `
+            font-size: 17px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            letter-spacing: -0.2px;
+            color: ${textColor};
+        `;
+
+        // Create the subtitle
+        const subtitle = document.createElement("div");
+        subtitle.textContent = "Please wait...";
+        subtitle.style.cssText = `
+            font-size: 15px;
+            opacity: 0.6;
+            font-weight: 400;
+            color: ${textColor};
+        `;
+
+        // Add CSS animation
+        const style = document.createElement("style");
+        style.textContent = `
+            @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+        `;
+        document.head.appendChild(style);
+
+        // Assemble the loading screen
+        container.appendChild(spinner);
+        container.appendChild(messageEl);
+        container.appendChild(subtitle);
+        overlay.appendChild(container);
+        document.body.appendChild(overlay);
     }
 
     function route() {
