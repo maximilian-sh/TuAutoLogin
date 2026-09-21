@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TuAutoLogin
 // @namespace    https://tuwien.ac.at/
-// @version      1.6.0
+// @version      1.6.1
 // @description  Auto-login helper for TUWEL/TISS via TU Wien IdP. Supports convenient (encrypted storage) and secure (manual input) modes, with optional TOTP auto-fill for MFA.
 // @author       Maximilian Kallina
 // @match        https://tuwel.tuwien.ac.at/*
@@ -14,7 +14,7 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
-// @run-at       document-end
+// @run-at       document-start
 // ==/UserScript==
 
 (function () {
@@ -245,18 +245,25 @@
         }
     }
 
-    function waitForSelector(selector, timeoutMs = 10000) {
-        return new Promise((resolve, reject) => {
+    // Resolves as soon as the element is parsed (we run at document-start, so this beats
+    // DOMContentLoaded, which waits for the page's deferred scripts). Resolves null if the
+    // element is still missing once the DOM is complete.
+    function waitForElement(selector) {
+        return new Promise(resolve => {
             const existing = document.querySelector(selector);
-            if (existing) return resolve(existing);
+            if (existing || document.readyState !== "loading") return resolve(existing);
+            const done = el => {
+                obs.disconnect();
+                document.removeEventListener("DOMContentLoaded", onReady);
+                resolve(el);
+            };
+            const onReady = () => done(document.querySelector(selector));
             const obs = new MutationObserver(() => {
                 const el = document.querySelector(selector);
-                if (el) { obs.disconnect(); resolve(el); }
+                if (el) done(el);
             });
-            obs.observe(document.documentElement, { childList: true, subtree: true });
-            if (timeoutMs > 0) {
-                setTimeout(() => { obs.disconnect(); reject(new Error("Timeout: " + selector)); }, timeoutMs);
-            }
+            obs.observe(document, { childList: true, subtree: true });
+            document.addEventListener("DOMContentLoaded", onReady);
         });
     }
 
@@ -280,17 +287,20 @@
         else document.querySelector("form#f")?.submit();
     }
 
-    function onTUWEL() {
-        document.querySelector(".eupopup-buttons .eupopup-button_1")?.click();
-        document.querySelector('a.login-identityprovider-btn[href*="auth/saml2/login.php"]')?.click();
+    async function onTUWEL() {
+        const btn = await waitForElement('a.login-identityprovider-btn[href*="auth/saml2/login.php"]');
+        if (btn) location.replace(btn.href);
     }
 
-    function onTISS() {
-        document.querySelector('a.toolLogin[href="/admin/authentifizierung"]')?.click();
+    async function onTISS() {
+        const link = await waitForElement('a.toolLogin[href="/admin/authentifizierung"]');
+        if (link) location.replace(link.href);
     }
 
     async function onIdPLogin() {
-        const userInput = await waitForSelector("#username").catch(() => null);
+        // The submit button comes after all inputs, so once it's parsed the form is complete
+        await waitForElement("#samlloginbutton");
+        const userInput = document.querySelector("#username");
         const passInput = document.querySelector("#password");
         if (!userInput || !passInput) return;
 
@@ -373,7 +383,9 @@
     }
 
     async function onIdPBadQuality() {
+        await waitForElement("body");
         createLoadingScreen("Updating password security...");
+        await new Promise(r => document.readyState === "loading" ? document.addEventListener("DOMContentLoaded", r) : r());
         const form = document.querySelector('body#tupwquality\\:badQuality form[name="f"]');
         if (!form) return;
         (form.querySelector('button[type="submit"], .btn[type="submit"]') ?? form).click?.() ?? form.submit();
