@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TuAutoLogin
 // @namespace    https://tuwien.ac.at/
-// @version      1.5.0
+// @version      1.6.0
 // @description  Auto-login helper for TUWEL/TISS via TU Wien IdP. Supports convenient (encrypted storage) and secure (manual input) modes, with optional TOTP auto-fill for MFA.
 // @author       Maximilian Kallina
 // @match        https://tuwel.tuwien.ac.at/*
@@ -14,7 +14,7 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
-// @run-at       document-idle
+// @run-at       document-end
 // ==/UserScript==
 
 (function () {
@@ -260,7 +260,21 @@
         });
     }
 
+    // If the IdP shows the login form again shortly after our submit, the login failed
+    // (wrong password / rejected TOTP). Don't resubmit, or we loop and risk an account lock.
+    const SUBMIT_GUARD_KEY = "TuAutoLogin.lastSubmit";
+    const SUBMIT_GUARD_MS = 30000;
+
+    function recentlySubmitted() {
+        try {
+            return Date.now() - Number(sessionStorage.getItem(SUBMIT_GUARD_KEY) || 0) < SUBMIT_GUARD_MS;
+        } catch {
+            return false;
+        }
+    }
+
     function submitForm() {
+        try { sessionStorage.setItem(SUBMIT_GUARD_KEY, String(Date.now())); } catch {}
         const btn = document.querySelector("#samlloginbutton");
         if (btn) btn.click();
         else document.querySelector("form#f")?.submit();
@@ -281,6 +295,13 @@
         if (!userInput || !passInput) return;
 
         const totpInput = document.querySelector("#totp");
+
+        if (recentlySubmitted()) {
+            console.warn("[TuAutoLogin] Login failed after auto-submit, not retrying.");
+            userInput.value ||= GM_getValue(STORAGE_KEYS.username, "");
+            passInput.focus();
+            return;
+        }
 
         if (getSecurityMode() === "convenient") {
             const storedUsername = GM_getValue(STORAGE_KEYS.username, "");
