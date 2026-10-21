@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TuAutoLogin
 // @namespace    https://tuwien.ac.at/
-// @version      1.6.1
+// @version      1.6.2
 // @description  Auto-login helper for TUWEL/TISS via TU Wien IdP. Supports convenient (encrypted storage) and secure (manual input) modes, with optional TOTP auto-fill for MFA.
 // @author       Maximilian Kallina
 // @match        https://tuwel.tuwien.ac.at/*
@@ -268,20 +268,38 @@
     }
 
     // If the IdP shows the login form again shortly after our submit, the login failed
-    // (wrong password / rejected TOTP). Don't resubmit, or we loop and risk an account lock.
+    // (wrong password / rejected TOTP / IdP hiccup). Retry a few times, then stop so we
+    // don't loop and risk an account lock.
     const SUBMIT_GUARD_KEY = "TuAutoLogin.lastSubmit";
-    const SUBMIT_GUARD_MS = 30000;
+    const SUBMIT_GUARD_MS = 60000; // covers a retry waiting up to 30s for a fresh TOTP code
+    const MAX_RETRIES = 2;
 
-    function recentlySubmitted() {
+    function getSubmitState() {
         try {
-            return Date.now() - Number(sessionStorage.getItem(SUBMIT_GUARD_KEY) || 0) < SUBMIT_GUARD_MS;
-        } catch {
-            return false;
+            const state = JSON.parse(sessionStorage.getItem(SUBMIT_GUARD_KEY) || "{}");
+            if (Date.now() - (state.at || 0) < SUBMIT_GUARD_MS) return state;
+        } catch {}
+        return { count: 0 };
+    }
+
+    // TOTP codes are single-use, so retrying within the same 30s step would be rejected again
+    async function generateFreshTOTP(secret) {
+        const { totpStep } = getSubmitState();
+        if (totpStep !== undefined) {
+            const msUntilNext = (totpStep + 1) * 30000 - Date.now();
+            if (msUntilNext > 0) await new Promise(r => setTimeout(r, msUntilNext + 500));
         }
+        return generateTOTP(secret);
     }
 
     function submitForm() {
-        try { sessionStorage.setItem(SUBMIT_GUARD_KEY, String(Date.now())); } catch {}
+        try {
+            sessionStorage.setItem(SUBMIT_GUARD_KEY, JSON.stringify({
+                at: Date.now(),
+                count: getSubmitState().count + 1,
+                totpStep: Math.floor(Date.now() / 30000),
+            }));
+        } catch {}
         const btn = document.querySelector("#samlloginbutton");
         if (btn) btn.click();
         else document.querySelector("form#f")?.submit();
@@ -306,26 +324,28 @@
 
         const totpInput = document.querySelector("#totp");
 
-        if (recentlySubmitted()) {
-            console.warn("[TuAutoLogin] Login failed after auto-submit, not retrying.");
+        const attempts = getSubmitState().count;
+        if (attempts > MAX_RETRIES) {
+            console.warn(`[TuAutoLogin] Login failed ${attempts} times, not retrying.`);
             userInput.value ||= GM_getValue(STORAGE_KEYS.username, "");
             passInput.focus();
             return;
         }
+        if (attempts) console.warn(`[TuAutoLogin] Login failed, retrying (${attempts}/${MAX_RETRIES}).`);
 
         if (getSecurityMode() === "convenient") {
             const storedUsername = GM_getValue(STORAGE_KEYS.username, "");
             const storedPassword = GM_getValue(STORAGE_KEYS.password, "");
 
             if (storedUsername && storedPassword) {
-                createLoadingScreen();
+                createLoadingScreen(attempts ? "Retrying sign-in..." : undefined);
                 userInput.value = storedUsername;
                 passInput.value = await decryptText(storedPassword);
 
                 if (totpInput) {
                     const secret = await getStoredTotpSecret();
                     if (secret) {
-                        totpInput.value = await generateTOTP(secret);
+                        totpInput.value = await generateFreshTOTP(secret);
                     } else {
                         document.getElementById("tuautologin-loading")?.remove();
                         document.body.style.overflow = "";
@@ -347,7 +367,7 @@
             if (totpInput) {
                 const secret = await getStoredTotpSecret();
                 if (secret) {
-                    totpInput.value = await generateTOTP(secret);
+                    totpInput.value = await generateFreshTOTP(secret);
                 } else {
                     totpInput.focus();
                     return;
