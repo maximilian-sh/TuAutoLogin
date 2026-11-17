@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         TuAutoLogin
 // @namespace    https://tuwien.ac.at/
-// @version      1.6.2
-// @description  Auto-login helper for TUWEL/TISS via TU Wien IdP. Supports convenient (encrypted storage) and secure (manual input) modes, with optional TOTP auto-fill for MFA.
+// @version      1.7.0
+// @description  Auto-login helper for TUWEL/TISS via TU Wien IdP. Stores credentials encrypted in the browser, with optional TOTP auto-fill for MFA.
 // @author       Maximilian Kallina
 // @match        https://tuwel.tuwien.ac.at/*
 // @match        https://tiss.tuwien.ac.at/*
@@ -23,11 +23,8 @@
     const STORAGE_KEYS = {
         username: "TuAutoLogin.username",
         password: "TuAutoLogin.password",
-        securityMode: "TuAutoLogin.securityMode",
         totpSecret: "TuAutoLogin.totpSecret",
     };
-
-    let hasTriedAutoSubmit = false;
 
     // Derive AES-GCM key once per page load (PBKDF2 is expensive)
     let _keyPromise = null;
@@ -133,56 +130,24 @@
         GM_setValue(STORAGE_KEYS.totpSecret, secret ? await encryptText(secret) : "");
     }
 
-    function getSecurityMode() {
-        return GM_getValue(STORAGE_KEYS.securityMode, "");
-    }
-
-    function setSecurityMode(mode) {
-        GM_setValue(STORAGE_KEYS.securityMode, mode);
-    }
-
-    async function getStoredCredentials() {
-        if (getSecurityMode() !== "convenient") return { username: "", password: "" };
-        const username = GM_getValue(STORAGE_KEYS.username, "");
-        const encryptedPassword = GM_getValue(STORAGE_KEYS.password, "");
-        const password = encryptedPassword ? await decryptText(encryptedPassword) : "";
-        return { username, password };
-    }
-
+    // Returns stored credentials, prompting for (and saving) any that are missing
     async function ensureCredentials() {
-        if (!getSecurityMode()) {
-            const choice = window.confirm(
-                "TuAutoLogin Security Choice\n\n" +
-                "OK = CONVENIENT MODE\n" +
-                "   Stores credentials in browser — fast automatic login\n\n" +
-                "CANCEL = SECURE MODE\n" +
-                "   No credentials stored — enter password each time"
-            );
-            setSecurityMode(choice ? "convenient" : "secure");
-            if (!choice) return { username: "", password: "" };
-        }
+        let username = GM_getValue(STORAGE_KEYS.username, "");
+        const encryptedPassword = GM_getValue(STORAGE_KEYS.password, "");
+        let password = encryptedPassword ? await decryptText(encryptedPassword) : "";
+        if (username && password) return { username, password };
 
-        if (getSecurityMode() === "secure") return { username: "", password: "" };
-
-        let { username, password } = await getStoredCredentials();
-
-        if (!username) {
-            username = window.prompt("Enter TU Wien username");
-            if (!username) return { username: "", password: "" };
-        }
-        if (!password) {
-            password = window.prompt("Enter TU Wien password");
-            if (!password) return { username: "", password: "" };
-        }
+        username ||= window.prompt("Enter TU Wien username") || "";
+        if (!username) return { username: "", password: "" };
+        password ||= window.prompt("Enter TU Wien password") || "";
+        if (!password) return { username: "", password: "" };
 
         GM_setValue(STORAGE_KEYS.username, username);
         GM_setValue(STORAGE_KEYS.password, await encryptText(password));
-
         return { username, password };
     }
 
     function registerMenu() {
-        const currentMode = getSecurityMode();
         const hasCredentials = GM_getValue(STORAGE_KEYS.username, "") || GM_getValue(STORAGE_KEYS.password, "");
         const hasTotpSecret = !!GM_getValue(STORAGE_KEYS.totpSecret, "");
 
@@ -227,20 +192,6 @@
                 } catch {
                     alert("Failed to generate TOTP code. Check that your secret is correct.");
                 }
-            });
-        }
-
-        if (currentMode === "convenient") {
-            GM_registerMenuCommand("Switch to Secure Mode", () => {
-                setSecurityMode("secure");
-                GM_setValue(STORAGE_KEYS.username, "");
-                GM_setValue(STORAGE_KEYS.password, "");
-                alert("Switched to Secure Mode. Stored credentials have been cleared.");
-            });
-        } else if (currentMode === "secure") {
-            GM_registerMenuCommand("Switch to Convenient Mode", () => {
-                setSecurityMode("convenient");
-                alert("Switched to Convenient Mode. Credentials will be stored in browser.");
             });
         }
     }
@@ -333,72 +284,23 @@
         }
         if (attempts) console.warn(`[TuAutoLogin] Login failed, retrying (${attempts}/${MAX_RETRIES}).`);
 
-        if (getSecurityMode() === "convenient") {
-            const storedUsername = GM_getValue(STORAGE_KEYS.username, "");
-            const storedPassword = GM_getValue(STORAGE_KEYS.password, "");
+        const { username, password } = await ensureCredentials();
+        if (!username || !password) return;
+        userInput.value = username;
+        passInput.value = password;
 
-            if (storedUsername && storedPassword) {
-                createLoadingScreen(attempts ? "Retrying sign-in..." : undefined);
-                userInput.value = storedUsername;
-                passInput.value = await decryptText(storedPassword);
-
-                if (totpInput) {
-                    const secret = await getStoredTotpSecret();
-                    if (secret) {
-                        totpInput.value = await generateFreshTOTP(secret);
-                    } else {
-                        document.getElementById("tuautologin-loading")?.remove();
-                        document.body.style.overflow = "";
-                        totpInput.focus();
-                        return;
-                    }
-                }
-
-                submitForm();
-                return;
-            }
-        }
-
-        const creds = await ensureCredentials();
-        if (creds.username && creds.password) {
-            userInput.value = creds.username;
-            passInput.value = creds.password;
-
-            if (totpInput) {
-                const secret = await getStoredTotpSecret();
-                if (secret) {
-                    totpInput.value = await generateFreshTOTP(secret);
-                } else {
-                    totpInput.focus();
-                    return;
-                }
-            }
-
-            submitForm();
+        const secret = totpInput ? await getStoredTotpSecret() : "";
+        if (totpInput && !secret) {
+            // No stored secret: let the user type the code and submit once it's complete
+            totpInput.focus();
+            totpInput.addEventListener("input", () => {
+                if (/^\d{6}$/.test(totpInput.value.trim())) submitForm();
+            });
             return;
         }
 
-        // Secure mode: auto-submit once all fields are filled by the user
-        if (!hasTriedAutoSubmit) {
-            hasTriedAutoSubmit = true;
-            const handle = () => {
-                setTimeout(tryAutoSubmit, 200);
-                document.removeEventListener("click", handle);
-                document.removeEventListener("keydown", handle);
-                document.removeEventListener("keyup", handle);
-            };
-            document.addEventListener("click", handle);
-            document.addEventListener("keydown", handle);
-            document.addEventListener("keyup", handle);
-        }
-    }
-
-    function tryAutoSubmit() {
-        const userInput = document.querySelector("#username");
-        const passInput = document.querySelector("#password");
-        const totpInput = document.querySelector("#totp");
-        if (!userInput?.value || !passInput?.value) return;
-        if (totpInput && !totpInput.value) return;
+        createLoadingScreen(attempts ? "Retrying sign-in..." : undefined);
+        if (totpInput) totpInput.value = await generateFreshTOTP(secret);
         submitForm();
     }
 
