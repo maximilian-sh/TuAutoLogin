@@ -2,8 +2,9 @@
 // @name         TuAutoLogin
 // @namespace    https://tuwien.ac.at/
 // @version      1.7.0
-// @description  Auto-login helper for TUWEL/TISS via TU Wien IdP. Stores credentials encrypted in the browser, with optional TOTP auto-fill for MFA.
+// @description  Auto-login helper for TUWEL/TISS via TU Wien IdP. Stores credentials (obfuscated) in the browser, with optional TOTP auto-fill for MFA.
 // @author       Maximilian Kallina
+// @license      MIT
 // @match        https://tuwel.tuwien.ac.at/*
 // @match        https://tiss.tuwien.ac.at/*
 // @match        https://idp.zid.tuwien.ac.at/simplesaml/*

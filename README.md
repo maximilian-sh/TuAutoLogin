@@ -77,3 +77,7 @@ Tampermonkey dashboard → TuAutoLogin → delete. This also removes the stored 
 This is an unofficial student project and not affiliated with TU Wien. Use at your own risk.
 
 Bug reports and suggestions: [GitHub Issues](https://github.com/maximilian-sh/TuAutoLogin/issues).
+
+## License
+
+[MIT](LICENSE)
